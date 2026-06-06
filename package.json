@@ -1,7 +1,7 @@
 {
   "name": "astro-api",
   "version": "1.0.0",
-  "description": "Astrology backend using Swiss Ephemeris",
+  "description": "Astrology backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,7 +11,7 @@
     "express": "^4.18.2",
     "luxon": "^3.4.4",
     "node-fetch": "^2.7.0",
-    "swisseph": "*"
+    "astronomia": "^4.1.1"
   },
   "engines": {
     "node": "20.x"
