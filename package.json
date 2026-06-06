@@ -1,7 +1,7 @@
 {
   "name": "astro-api",
   "version": "1.0.0",
-  "description": "Astrology backend — pure JS, no native modules",
+  "description": "Astrology backend - pure JS no native modules",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
