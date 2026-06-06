@@ -7,12 +7,6 @@
 const express      = require("express");
 const cors         = require("cors");
 const { DateTime } = require("luxon");
-const solar        = require("astronomia/solar");
-const moonposition = require("astronomia/moonposition");
-const planetposition = require("astronomia/planetposition");
-const { JulianDay } = require("astronomia/julian");
-const sidereal     = require("astronomia/sidereal");
-const coord        = require("astronomia/coord");
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
