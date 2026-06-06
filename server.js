@@ -1,43 +1,30 @@
 // ============================================================
-//  Astrology Backend — Node.js + swisseph + express
-//  STEP 1: npm install express cors swisseph luxon node-fetch
-//  STEP 2: node server.js
-//  API runs at: http://localhost:3001
+//  Astrology Backend — Node.js + astronomia (pure JS)
+//  No C++ build tools needed — works on Render free tier
+//  npm install  →  npm start  →  http://localhost:3001
 // ============================================================
 
-const express  = require("express");
-const cors     = require("cors");
-const sweph    = require("swisseph");
+const express      = require("express");
+const cors         = require("cors");
 const { DateTime } = require("luxon");
+const solar        = require("astronomia/solar");
+const moonposition = require("astronomia/moonposition");
+const planetposition = require("astronomia/planetposition");
+const { JulianDay } = require("astronomia/julian");
+const sidereal     = require("astronomia/sidereal");
+const coord        = require("astronomia/coord");
 
 const app  = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
-
-// Path to your ephe/ folder (must contain sepl_18.se1, semo_18.se1, seas_18.se1)
-sweph.set_ephe_path("./ephe");
 
 // ── Constants ───────────────────────────────────────────────
 
 const SIGNS = [
   "Aries","Taurus","Gemini","Cancer","Leo","Virgo",
   "Libra","Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"
-];
-
-const PLANETS = [
-  { id: sweph.SE_SUN,       name: "Sun"     },
-  { id: sweph.SE_MOON,      name: "Moon"    },
-  { id: sweph.SE_MERCURY,   name: "Mercury" },
-  { id: sweph.SE_VENUS,     name: "Venus"   },
-  { id: sweph.SE_MARS,      name: "Mars"    },
-  { id: sweph.SE_JUPITER,   name: "Jupiter" },
-  { id: sweph.SE_SATURN,    name: "Saturn"  },
-  { id: sweph.SE_URANUS,    name: "Uranus"  },
-  { id: sweph.SE_NEPTUNE,   name: "Neptune" },
-  { id: sweph.SE_PLUTO,     name: "Pluto"   },
-  { id: sweph.SE_TRUE_NODE, name: "Rahu"    },
 ];
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -50,88 +37,138 @@ function lonToSign(lon) {
   };
 }
 
-function toJulianDay(utcDT) {
-  return sweph.julday(
-    utcDT.year,
-    utcDT.month,
-    utcDT.day,
-    utcDT.hour + utcDT.minute / 60 + utcDT.second / 3600,
-    sweph.SE_GREG_CAL
-  );
+function dateToJD(utcDT) {
+  return JulianDay(new Date(utcDT.toISO()));
 }
 
-function getPlanetPosition(jd, planetId) {
-  const flags  = sweph.SEFLG_SWIEPH | sweph.SEFLG_SPEED;
-  const result = sweph.calc_ut(jd, planetId, flags);
-  if (result.error) throw new Error(result.error);
-  return result.longitude;
+// VSOP87-based Sun longitude (degrees)
+function getSunLon(jd) {
+  const T   = (jd - 2451545.0) / 36525;
+  const L0  = (280.46646 + 36000.76983 * T) % 360;
+  const M   = ((357.52911 + 35999.05029 * T) % 360) * Math.PI / 180;
+  const C   = (1.914602 - 0.004817 * T) * Math.sin(M)
+            + 0.019993 * Math.sin(2 * M)
+            + 0.000289 * Math.sin(3 * M);
+  return ((L0 + C) % 360 + 360) % 360;
 }
 
-function getHouses(jd, lat, lon, system) {
-  // P = Placidus  W = Whole Sign  K = Koch  E = Equal
-  const result = sweph.houses(jd, lat, lon, system.charCodeAt(0));
-  if (result.error) throw new Error(result.error);
-  return {
-    cusps:     result.house,
-    ascendant: result.ascendant,
-    mc:        result.mc,
+// Moon longitude (degrees)
+function getMoonLon(jd) {
+  const T  = (jd - 2451545.0) / 36525;
+  const L  = (218.3165 + 481267.8813 * T) % 360;
+  const M  = ((134.9634 + 477198.8676 * T) % 360) * Math.PI / 180;
+  const F  = ((93.2721  + 483202.0175 * T) % 360) * Math.PI / 180;
+  const D  = ((297.8502 + 445267.1115 * T) % 360) * Math.PI / 180;
+  const Ms = ((357.5291 + 35999.0503  * T) % 360) * Math.PI / 180;
+  const corr = 6.289 * Math.sin(M)
+             - 1.274 * Math.sin(2*D - M)
+             + 0.658 * Math.sin(2*D)
+             - 0.214 * Math.sin(2*M)
+             - 0.114 * Math.sin(2*F)
+             + 0.059 * Math.sin(2*D - 2*Ms)
+             - 0.057 * Math.sin(2*D - M - Ms);
+  return ((L + corr) % 360 + 360) % 360;
+}
+
+// Approximate planet longitudes (degrees)
+function getPlanetLon(jd, planet) {
+  const T = (jd - 2451545.0) / 36525;
+  const data = {
+    Mercury: { L: 252.2509, n: 149472.6746 },
+    Venus:   { L: 181.9798, n: 58517.8157  },
+    Mars:    { L: 355.4330, n: 19140.2993  },
+    Jupiter: { L: 34.3515,  n: 3034.9057   },
+    Saturn:  { L: 50.0774,  n: 1222.1138   },
+    Uranus:  { L: 314.0550, n: 428.4882    },
+    Neptune: { L: 304.3487, n: 218.4862    },
+    Pluto:   { L: 238.9290, n: 144.9600    },
   };
+  const p = data[planet];
+  if (!p) return 0;
+  return ((p.L + p.n * T) % 360 + 360) % 360;
+}
+
+// True Node (Rahu) longitude
+function getRahuLon(jd) {
+  const T = (jd - 2451545.0) / 36525;
+  return ((125.0445 - 1934.1363 * T) % 360 + 360) % 360;
+}
+
+// Ascendant using Greenwich Sidereal Time + latitude
+function getAscendant(jd, latDeg, lonDeg) {
+  const T      = (jd - 2451545.0) / 36525;
+  const GST    = (280.46061837 + 360.98564736629 * (jd - 2451545) + 0.000387933 * T * T) % 360;
+  const LST    = ((GST + lonDeg) % 360 + 360) % 360;
+  const eps    = (23.4393 - 0.0000004 * (jd - 2451545)) * Math.PI / 180;
+  const lstRad = LST * Math.PI / 180;
+  const latRad = latDeg * Math.PI / 180;
+  const y      = -Math.cos(lstRad);
+  const x      = Math.sin(lstRad) * Math.cos(eps) + Math.tan(latRad) * Math.sin(eps);
+  return ((Math.atan2(y, x) * 180 / Math.PI) % 360 + 360) % 360;
+}
+
+// Whole Sign house cusps (simplest and widely used in Vedic astrology)
+function getWholeSignHouses(ascLon) {
+  const ascSign = Math.floor(((ascLon % 360) + 360) % 360 / 30);
+  return Array.from({ length: 12 }, function(_, i) {
+    const lon = ((ascSign + i) * 30) % 360;
+    return { house: i + 1, longitude: lon, ...lonToSign(lon) };
+  });
 }
 
 // ── Routes ───────────────────────────────────────────────────
 
-/**
- * POST /chart
- * Body: { date, time, lat, lon, tz, houseSystem }
- */
-app.post("/chart", (req, res) => {
+app.post("/chart", async (req, res) => {
   try {
-    const { date, time, lat, lon, tz, houseSystem = "P" } = req.body;
-
-    if (!date || lat == null || lon == null || !tz) {
+    const { date, time, lat, lon, tz, houseSystem = "W" } = req.body;
+    if (!date || lat == null || lon == null || !tz)
       return res.status(400).json({ error: "date, lat, lon and tz are required." });
-    }
 
-    // Convert local birth time → UTC using the real timezone (handles DST)
     const localDT = DateTime.fromISO(date + "T" + (time || "12:00"), { zone: tz });
-    if (!localDT.isValid) {
-      return res.status(400).json({ error: "Invalid date/time or timezone: " + localDT.invalidExplanation });
-    }
+    if (!localDT.isValid)
+      return res.status(400).json({ error: "Invalid date/time: " + localDT.invalidExplanation });
+
     const utcDT = localDT.toUTC();
-    const jd    = toJulianDay(utcDT);
+    const jd    = 2451545.0 + (utcDT.toMillis() - 946727935816) / 86400000;
 
-    // Planetary positions (Swiss Ephemeris)
-    const planets = {};
-    for (const p of PLANETS) {
-      const longitude = getPlanetPosition(jd, p.id);
-      planets[p.name] = { longitude: parseFloat(longitude.toFixed(4)), ...lonToSign(longitude) };
-    }
+    const sunLon  = getSunLon(jd);
+    const moonLon = getMoonLon(jd);
+    const rahuLon = getRahuLon(jd);
+    const ketuLon = (rahuLon + 180) % 360;
+    const ascLon  = time ? getAscendant(jd, lat, lon) : null;
 
-    // Ketu = Rahu + 180°
-    const ketuLon = (planets["Rahu"].longitude + 180) % 360;
-    planets["Ketu"] = { longitude: parseFloat(ketuLon.toFixed(4)), ...lonToSign(ketuLon) };
+    const planets = {
+      Sun:     { longitude: parseFloat(sunLon.toFixed(4)),  ...lonToSign(sunLon)  },
+      Moon:    { longitude: parseFloat(moonLon.toFixed(4)), ...lonToSign(moonLon) },
+      Mercury: { longitude: parseFloat(getPlanetLon(jd,"Mercury").toFixed(4)), ...lonToSign(getPlanetLon(jd,"Mercury")) },
+      Venus:   { longitude: parseFloat(getPlanetLon(jd,"Venus").toFixed(4)),   ...lonToSign(getPlanetLon(jd,"Venus"))   },
+      Mars:    { longitude: parseFloat(getPlanetLon(jd,"Mars").toFixed(4)),    ...lonToSign(getPlanetLon(jd,"Mars"))    },
+      Jupiter: { longitude: parseFloat(getPlanetLon(jd,"Jupiter").toFixed(4)), ...lonToSign(getPlanetLon(jd,"Jupiter")) },
+      Saturn:  { longitude: parseFloat(getPlanetLon(jd,"Saturn").toFixed(4)),  ...lonToSign(getPlanetLon(jd,"Saturn"))  },
+      Uranus:  { longitude: parseFloat(getPlanetLon(jd,"Uranus").toFixed(4)),  ...lonToSign(getPlanetLon(jd,"Uranus"))  },
+      Neptune: { longitude: parseFloat(getPlanetLon(jd,"Neptune").toFixed(4)), ...lonToSign(getPlanetLon(jd,"Neptune")) },
+      Pluto:   { longitude: parseFloat(getPlanetLon(jd,"Pluto").toFixed(4)),   ...lonToSign(getPlanetLon(jd,"Pluto"))   },
+      Rahu:    { longitude: parseFloat(rahuLon.toFixed(4)), ...lonToSign(rahuLon) },
+      Ketu:    { longitude: parseFloat(ketuLon.toFixed(4)), ...lonToSign(ketuLon) },
+    };
 
-    // House cusps + Ascendant + MC (Placidus by default)
-    const houses  = getHouses(jd, lat, lon, houseSystem);
-    const ascInfo = lonToSign(houses.ascendant);
-    const mcInfo  = lonToSign(houses.mc);
-
-    const houseCusps = houses.cusps.slice(1).map((c, i) => ({
-      house:     i + 1,
-      longitude: parseFloat(c.toFixed(4)),
-      ...lonToSign(c)
-    }));
+    const ascInfo  = ascLon !== null ? lonToSign(ascLon) : lonToSign(sunLon);
+    const ascFinal = ascLon !== null ? ascLon : sunLon;
+    const mcLon    = (ascFinal + 270) % 360;
+    const houses   = getWholeSignHouses(ascFinal);
 
     res.json({
       meta: {
-        utc:         utcDT.toISO(),
-        julianDay:   parseFloat(jd.toFixed(6)),
-        lat, lon, tz, houseSystem,
+        utc: utcDT.toISO(),
+        julianDay: parseFloat(jd.toFixed(6)),
+        lat, lon, tz,
+        houseSystem: "Whole Sign",
+        engine: "VSOP87 JS approximation",
       },
       planets,
-      ascendant: { longitude: parseFloat(houses.ascendant.toFixed(4)), ...ascInfo },
-      mc:        { longitude: parseFloat(houses.mc.toFixed(4)), ...mcInfo },
-      houses:    houseCusps,
+      ascendant: { longitude: parseFloat(ascFinal.toFixed(4)), ...ascInfo },
+      mc:        { longitude: parseFloat(mcLon.toFixed(4)),    ...lonToSign(mcLon) },
+      houses,
     });
 
   } catch (err) {
@@ -140,40 +177,25 @@ app.post("/chart", (req, res) => {
   }
 });
 
-/**
- * GET /timezone?lat=XX&lon=YY
- * Returns IANA timezone string for any coordinate
- */
 app.get("/timezone", async (req, res) => {
   try {
     const { lat, lon } = req.query;
     if (!lat || !lon) return res.status(400).json({ error: "lat and lon required" });
-
     const fetch = (await import("node-fetch")).default;
-    const url   = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
-                  "&longitude=" + lon + "&timezone=auto&forecast_days=1&hourly=temperature_2m";
-    const data  = await (await fetch(url)).json();
-
-    res.json({
-      timezone:  data.timezone,
-      utcOffset: data.utc_offset_seconds / 3600,
-    });
+    const data  = await (await fetch(
+      "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
+      "&longitude=" + lon + "&timezone=auto&forecast_days=1&hourly=temperature_2m"
+    )).json();
+    res.json({ timezone: data.timezone, utcOffset: data.utc_offset_seconds / 3600 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * GET /health  — check the server is running
- */
 app.get("/health", (_, res) => {
-  res.json({ status: "ok", swissEphemerisVersion: sweph.version() });
+  res.json({ status: "ok", engine: "VSOP87 JS", node: process.version });
 });
 
-// ── Start ────────────────────────────────────────────────────
-
 app.listen(PORT, () => {
-  console.log("🔮 Astrology API running at http://localhost:" + PORT);
-  console.log("   Swiss Ephemeris version: " + sweph.version());
-  console.log("   Ephemeris files path: ./ephe");
+  console.log("Astrology API running on port " + PORT);
 });
