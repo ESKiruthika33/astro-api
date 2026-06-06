@@ -11,7 +11,7 @@
     "express": "^4.18.2",
     "luxon": "^3.4.4",
     "node-fetch": "^2.7.0",
-    "swisseph": "^2.10.5"
+    "swisseph": "*"
   },
   "engines": {
     "node": "20.x"
