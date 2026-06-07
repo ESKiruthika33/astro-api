@@ -1,16 +1,18 @@
 const express      = require("express");
-const cors         = require("cors");
 const { DateTime } = require("luxon");
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
-app.options("*", cors());
+app.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  next();
+});
 app.use(express.json());
 
 // ── Constants ───────────────────────────────────────────────
